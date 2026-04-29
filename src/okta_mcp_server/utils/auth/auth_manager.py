@@ -8,9 +8,11 @@
 # This module handles the authentication flow for Okta using the Device Authorization Grant.
 # It initiates the device authorization, polls for the access token, and manages the Okta API token lifecycle.
 
+import base64
 import os
 import sys
 import time
+import uuid
 import webbrowser
 from dataclasses import dataclass, field
 
@@ -77,51 +79,66 @@ class OktaAuthManager:
         logger.info(f"OktaAuthManager initialized with org_url: {self.org_url}, client_id: {self.client_id}")
         logger.debug(f"Configured scopes: {self.scopes}")
 
+    def _load_private_key(self) -> tuple:
+        """Return (key_bytes, key_obj, jwt_algorithm, ec_curve_name, ec_coord_size).
+
+        ec_curve_name and ec_coord_size are None for RSA keys.
+        """
+        key_bytes = self.private_key
+        if isinstance(key_bytes, str):
+            key_bytes = key_bytes.encode("utf-8")
+
+        key_obj = load_pem_private_key(key_bytes, password=None)
+        if isinstance(key_obj, EllipticCurvePrivateKey):
+            curve = key_obj.curve
+            if isinstance(curve, SECP384R1):
+                return key_bytes, key_obj, "ES384", "P-384", 48
+            elif isinstance(curve, SECP521R1):
+                return key_bytes, key_obj, "ES512", "P-521", 66
+            else:
+                return key_bytes, key_obj, "ES256", "P-256", 32
+        return key_bytes, key_obj, "RS256", None, None
+
     def _get_client_assertion(self) -> str:
         """Generate a JWT client assertion for browserless authentication."""
         logger.debug("Generating client assertion JWT")
-
         token_url = f"{self.org_url}/oauth2/v1/token"
-
         try:
-            # Ensure the key is in bytes format
-            private_key = self.private_key
-            if isinstance(private_key, str):
-                private_key = private_key.encode("utf-8")
-
-            # Detect key type so we use the right JWT algorithm (RS256 for RSA,
-            # ES256/ES384/ES512 for EC — using RS256 with an EC key causes a
-            # cryptography-library TypeError at sign time).
-            key_obj = load_pem_private_key(private_key, password=None)
-            if isinstance(key_obj, EllipticCurvePrivateKey):
-                curve = key_obj.curve
-                if isinstance(curve, SECP384R1):
-                    algorithm = "ES384"
-                elif isinstance(curve, SECP521R1):
-                    algorithm = "ES512"
-                else:
-                    algorithm = "ES256"
-            else:
-                algorithm = "RS256"
-
+            key_bytes, _, algorithm, _, _ = self._load_private_key()
             headers = {"alg": algorithm, "kid": self.key_id}
-
             payload = {
                 "iss": self.client_id,
                 "sub": self.client_id,
                 "aud": token_url,
                 "iat": int(time.time()),
-                "exp": int(time.time()) + 300,  # 5 minutes expiration
+                "exp": int(time.time()) + 300,
             }
-
-            client_assertion = jwt.encode(payload, private_key, algorithm=algorithm, headers=headers)
-
+            client_assertion = jwt.encode(payload, key_bytes, algorithm=algorithm, headers=headers)
             logger.debug("Client assertion JWT generated successfully")
             return client_assertion
-
         except Exception as e:
             logger.error(f"Failed to generate client assertion: {e}")
             raise
+
+    def _generate_dpop_proof(self, http_method: str, http_url: str, nonce: str | None = None) -> str:
+        """Generate a DPoP proof JWT (RFC 9449) for the given HTTP request."""
+        key_bytes, key_obj, algorithm, curve_name, coord_size = self._load_private_key()
+
+        if not isinstance(key_obj, EllipticCurvePrivateKey):
+            raise ValueError("DPoP requires an EC private key")
+
+        pub = key_obj.public_key().public_numbers()
+
+        def b64url(n: int, size: int) -> str:
+            return base64.urlsafe_b64encode(n.to_bytes(size, "big")).rstrip(b"=").decode()
+
+        jwk = {"kty": "EC", "crv": curve_name, "x": b64url(pub.x, coord_size), "y": b64url(pub.y, coord_size)}
+        dpop_headers = {"typ": "dpop+jwt", "alg": algorithm, "jwk": jwk}
+        dpop_payload = {"jti": str(uuid.uuid4()), "htm": http_method, "htu": http_url, "iat": int(time.time())}
+        if nonce:
+            dpop_payload["nonce"] = nonce
+
+        return jwt.encode(dpop_payload, key_bytes, algorithm=algorithm, headers=dpop_headers)
 
     def _browserless_authenticate(self) -> str | None:
         """Perform browserless authentication using client credentials with JWT assertion."""
@@ -150,8 +167,19 @@ class OktaAuthManager:
             logger.debug(f"Requesting token from: {token_url}")
             logger.debug(f"Scopes: {self.scopes}")
 
+            dpop_proof = self._generate_dpop_proof("POST", token_url)
+            headers["DPoP"] = dpop_proof
+
             response = requests.post(token_url, headers=headers, data=data)
             logger.debug(f"Response status code: {response.status_code}")
+
+            # Okta may require a server-supplied nonce on the first attempt (RFC 9449 §8)
+            if response.status_code == 400 and response.json().get("error") == "use_dpop_nonce":
+                dpop_nonce = response.headers.get("DPoP-Nonce")
+                if dpop_nonce:
+                    logger.debug("Retrying with DPoP nonce")
+                    headers["DPoP"] = self._generate_dpop_proof("POST", token_url, nonce=dpop_nonce)
+                    response = requests.post(token_url, headers=headers, data=data)
 
             if response.status_code == 200:
                 resp_json = response.json()
