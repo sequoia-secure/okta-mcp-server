@@ -9,10 +9,11 @@ from loguru import logger
 from okta.client import Client as OktaClient
 
 from okta_mcp_server.utils.auth.auth_manager import OktaAuthManager
+from okta_mcp_server.utils.dpop_executor import make_dpop_executor
 
 
 async def get_okta_client(manager: OktaAuthManager) -> OktaClient:
-    """Initialize and return an Okta client"""
+    """Initialize and return an Okta client with DPoP-aware request execution."""
     logger.debug("Initializing Okta client")
     if not await manager.is_valid_token():
         logger.warning("Token is invalid or expired, re-authenticating")
@@ -22,6 +23,7 @@ async def get_okta_client(manager: OktaAuthManager) -> OktaClient:
         "token": manager._api_token,
         "authorizationMode": "Bearer",
         "userAgent": "okta-mcp-server/0.0.1",
+        "requestExecutor": make_dpop_executor(manager),
     }
     logger.debug(f"Okta client configured for org: {manager.org_url}")
     return OktaClient(config)
