@@ -5,6 +5,8 @@
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and limitations under the License.
 
+from urllib.parse import urlsplit, urlunsplit
+
 from okta.request_executor import RequestExecutor
 
 
@@ -41,7 +43,10 @@ def make_dpop_executor(auth_manager):
                 return (request, error)
 
             full_url = request["url"]
-            dpop_proof = auth_manager._generate_dpop_proof(method.upper(), full_url)
+            # RFC 9449 §4.2: htu MUST NOT include query or fragment components.
+            parsed = urlsplit(full_url)
+            htu = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+            dpop_proof = auth_manager._generate_dpop_proof(method.upper(), htu)
             request["headers"]["DPoP"] = dpop_proof
             # Ensure Authorization stays DPoP even if super() merged in Bearer default.
             request["headers"]["Authorization"] = f"DPoP {auth_manager._api_token}"
