@@ -18,6 +18,13 @@ import jwt
 import keyring
 import keyring.backend
 import requests
+from cryptography.hazmat.primitives.asymmetric.ec import (
+    EllipticCurvePrivateKey,
+    SECP256R1,
+    SECP384R1,
+    SECP521R1,
+)
+from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from loguru import logger
 
 SERVICE_NAME = "OktaAuthManager"
@@ -76,23 +83,38 @@ class OktaAuthManager:
 
         token_url = f"{self.org_url}/oauth2/v1/token"
 
-        headers = {"alg": "RS256", "kid": self.key_id}
-
-        payload = {
-            "iss": self.client_id,
-            "sub": self.client_id,
-            "aud": token_url,
-            "iat": int(time.time()),
-            "exp": int(time.time()) + 300,  # 5 minutes expiration
-        }
-
         try:
             # Ensure the key is in bytes format
             private_key = self.private_key
             if isinstance(private_key, str):
                 private_key = private_key.encode("utf-8")
 
-            client_assertion = jwt.encode(payload, private_key, algorithm="RS256", headers=headers)
+            # Detect key type so we use the right JWT algorithm (RS256 for RSA,
+            # ES256/ES384/ES512 for EC — using RS256 with an EC key causes a
+            # cryptography-library TypeError at sign time).
+            key_obj = load_pem_private_key(private_key, password=None)
+            if isinstance(key_obj, EllipticCurvePrivateKey):
+                curve = key_obj.curve
+                if isinstance(curve, SECP384R1):
+                    algorithm = "ES384"
+                elif isinstance(curve, SECP521R1):
+                    algorithm = "ES512"
+                else:
+                    algorithm = "ES256"
+            else:
+                algorithm = "RS256"
+
+            headers = {"alg": algorithm, "kid": self.key_id}
+
+            payload = {
+                "iss": self.client_id,
+                "sub": self.client_id,
+                "aud": token_url,
+                "iat": int(time.time()),
+                "exp": int(time.time()) + 300,  # 5 minutes expiration
+            }
+
+            client_assertion = jwt.encode(payload, private_key, algorithm=algorithm, headers=headers)
 
             logger.debug("Client assertion JWT generated successfully")
             return client_assertion
