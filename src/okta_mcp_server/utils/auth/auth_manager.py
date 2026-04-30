@@ -120,8 +120,21 @@ class OktaAuthManager:
             logger.error(f"Failed to generate client assertion: {e}")
             raise
 
-    def _generate_dpop_proof(self, http_method: str, http_url: str, nonce: str | None = None) -> str:
-        """Generate a DPoP proof JWT (RFC 9449) for the given HTTP request."""
+    def _generate_dpop_proof(
+        self,
+        http_method: str,
+        http_url: str,
+        nonce: str | None = None,
+        access_token: str | None = None,
+    ) -> str:
+        """Generate a DPoP proof JWT (RFC 9449) for the given HTTP request.
+
+        access_token: when presenting a bound token to a resource server, pass it
+        here so the required `ath` claim (sha256 of the token) is included.
+        Not needed at the token endpoint where no token exists yet.
+        """
+        import hashlib
+
         key_bytes, key_obj, algorithm, curve_name, coord_size = self._load_private_key()
 
         if not isinstance(key_obj, EllipticCurvePrivateKey):
@@ -137,6 +150,12 @@ class OktaAuthManager:
         dpop_payload = {"jti": str(uuid.uuid4()), "htm": http_method, "htu": http_url, "iat": int(time.time())}
         if nonce:
             dpop_payload["nonce"] = nonce
+        if access_token:
+            # RFC 9449 §4.2: ath = base64url(sha256(ascii(access_token)))
+            ath = base64.urlsafe_b64encode(
+                hashlib.sha256(access_token.encode("ascii")).digest()
+            ).rstrip(b"=").decode()
+            dpop_payload["ath"] = ath
 
         return jwt.encode(dpop_payload, key_bytes, algorithm=algorithm, headers=dpop_headers)
 

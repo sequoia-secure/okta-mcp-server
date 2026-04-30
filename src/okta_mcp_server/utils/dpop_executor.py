@@ -30,10 +30,16 @@ def make_dpop_executor(auth_manager):
             self._dpop_api_nonce = None
 
         def _make_dpop_proof(self, method: str, url: str, nonce: str | None = None) -> str:
-            """Generate a DPoP proof with htu stripped of query/fragment (RFC 9449 §4.2)."""
+            """Generate a DPoP proof with htu stripped of query/fragment (RFC 9449 §4.2).
+
+            Includes ath (access token hash) as required by RFC 9449 §4.2 when
+            presenting a DPoP-bound token to a resource server.
+            """
             parsed = urlsplit(url)
             htu = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
-            return auth_manager._generate_dpop_proof(method.upper(), htu, nonce=nonce)
+            return auth_manager._generate_dpop_proof(
+                method.upper(), htu, nonce=nonce, access_token=auth_manager._api_token
+            )
 
         async def create_request(
             self,
