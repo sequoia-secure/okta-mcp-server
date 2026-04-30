@@ -17,8 +17,6 @@ import webbrowser
 from dataclasses import dataclass, field
 
 import jwt
-import keyring
-import keyring.backend
 import requests
 from cryptography.hazmat.primitives.asymmetric.ec import (
     EllipticCurvePrivateKey,
@@ -28,8 +26,6 @@ from cryptography.hazmat.primitives.asymmetric.ec import (
 )
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from loguru import logger
-
-SERVICE_NAME = "OktaAuthManager"
 
 
 @dataclass
@@ -43,6 +39,8 @@ class OktaAuthManager:
     private_key: str = field(init=False, default=None)
     key_id: str = field(init=False, default=None)
     use_browserless_auth: bool = field(init=False, default=False)
+    _api_token: str | None = field(init=False, default=None)
+    _refresh_token: str | None = field(init=False, default=None)
 
     # TODO: Implement a way to set scopes dynamically by the user if needed.
 
@@ -52,6 +50,8 @@ class OktaAuthManager:
         self.org_url = os.environ.get("OKTA_ORG_URL")
         self.client_id = os.environ.get("OKTA_CLIENT_ID")
         self.scopes = f"{self.scopes} {os.environ.get('OKTA_SCOPES', '').strip()}"
+        self._api_token = None
+        self._refresh_token = None
 
         # Check for browserless auth configuration
         self.private_key = os.environ.get("OKTA_PRIVATE_KEY")
@@ -120,8 +120,21 @@ class OktaAuthManager:
             logger.error(f"Failed to generate client assertion: {e}")
             raise
 
-    def _generate_dpop_proof(self, http_method: str, http_url: str, nonce: str | None = None) -> str:
-        """Generate a DPoP proof JWT (RFC 9449) for the given HTTP request."""
+    def _generate_dpop_proof(
+        self,
+        http_method: str,
+        http_url: str,
+        nonce: str | None = None,
+        access_token: str | None = None,
+    ) -> str:
+        """Generate a DPoP proof JWT (RFC 9449) for the given HTTP request.
+
+        access_token: when presenting a bound token to a resource server, pass it
+        here so the required `ath` claim (sha256 of the token) is included.
+        Not needed at the token endpoint where no token exists yet.
+        """
+        import hashlib
+
         key_bytes, key_obj, algorithm, curve_name, coord_size = self._load_private_key()
 
         if not isinstance(key_obj, EllipticCurvePrivateKey):
@@ -137,6 +150,12 @@ class OktaAuthManager:
         dpop_payload = {"jti": str(uuid.uuid4()), "htm": http_method, "htu": http_url, "iat": int(time.time())}
         if nonce:
             dpop_payload["nonce"] = nonce
+        if access_token:
+            # RFC 9449 §4.2: ath = base64url(sha256(ascii(access_token)))
+            ath = base64.urlsafe_b64encode(
+                hashlib.sha256(access_token.encode("ascii")).digest()
+            ).rstrip(b"=").decode()
+            dpop_payload["ath"] = ath
 
         return jwt.encode(dpop_payload, key_bytes, algorithm=algorithm, headers=dpop_headers)
 
@@ -187,12 +206,8 @@ class OktaAuthManager:
 
                 if access_token:
                     logger.info("Successfully obtained access token via browserless authentication")
-                    keyring.set_password(SERVICE_NAME, "api_token", access_token)
+                    self._api_token = access_token
                     self.token_timestamp = int(time.time())
-
-                    # Note: Client credentials flow doesn't provide refresh tokens
-                    logger.debug("Note: Client credentials flow does not provide refresh tokens")
-
                     return access_token
 
                 logger.error("No access token in response")
@@ -260,12 +275,12 @@ class OktaAuthManager:
 
                 if response.status_code == 200 and "access_token" in resp_json:
                     logger.info("Successfully obtained access token")
-                    keyring.set_password(SERVICE_NAME, "api_token", resp_json["access_token"])
+                    self._api_token = resp_json["access_token"]
                     self.token_timestamp = int(time.time())
 
                     if "refresh_token" in resp_json:
                         logger.debug("Refresh token received and stored")
-                        keyring.set_password(SERVICE_NAME, "refresh_token", resp_json["refresh_token"])
+                        self._refresh_token = resp_json["refresh_token"]
 
                     return resp_json["access_token"]
 
@@ -294,8 +309,7 @@ class OktaAuthManager:
         """Attempt to refresh the access token using the stored refresh token."""
         logger.info("Attempting to refresh access token")
 
-        refresh_token = keyring.get_password(SERVICE_NAME, "refresh_token")
-        if not refresh_token:
+        if not self._refresh_token:
             logger.warning("No refresh token available")
             return False
 
@@ -304,7 +318,7 @@ class OktaAuthManager:
         data = {
             "client_id": self.client_id,
             "grant_type": "refresh_token",
-            "refresh_token": refresh_token,
+            "refresh_token": self._refresh_token,
         }
 
         logger.debug(f"Refresh token request URL: {token_url}")
@@ -315,11 +329,11 @@ class OktaAuthManager:
 
             if response.status_code == 200:
                 resp_json = response.json()
-                keyring.set_password(SERVICE_NAME, "api_token", resp_json["access_token"])
+                self._api_token = resp_json["access_token"]
 
                 if "refresh_token" in resp_json:
                     logger.debug("New refresh token received and stored")
-                    keyring.set_password(SERVICE_NAME, "refresh_token", resp_json["refresh_token"])
+                    self._refresh_token = resp_json["refresh_token"]
 
                 self.token_timestamp = int(time.time())
                 logger.info("Token refreshed successfully")
@@ -370,44 +384,28 @@ class OktaAuthManager:
         """Ensure that a valid token is available. Refresh or re-authenticate if needed."""
         logger.debug(f"Checking token validity (expiry duration: {expiry_duration}s)")
 
-        api_token = keyring.get_password(SERVICE_NAME, "api_token")
         token_age = time.time() - self.token_timestamp
 
-        if api_token and token_age < expiry_duration:
+        if self._api_token and token_age < expiry_duration:
             logger.debug(f"Token is valid (age: {token_age:.0f}s)")
             return True
 
         logger.info(f"Token is expired or missing (age: {token_age:.0f}s)")
         if self.use_browserless_auth:
-            # For browserless auth, we can't refresh, so re-authenticate
             logger.info("Re-authenticating using browserless flow")
             await self.authenticate()
         else:
-            # For device flow, try to refresh first
             refreshed = self.refresh_access_token()
-
-            # If refresh token is not available or refresh failed, re-authenticate
             if not refreshed:
                 logger.warning("Token refresh failed, initiating re-authentication")
                 await self.authenticate()
 
-        return keyring.get_password(SERVICE_NAME, "api_token") is not None
+        return self._api_token is not None
 
     def clear_tokens(self):
-        """Clear all stored tokens from keyring."""
+        """Clear all stored tokens."""
         logger.info("Clearing stored tokens")
-
-        try:
-            keyring.delete_password(SERVICE_NAME, "api_token")
-            logger.debug("API token deleted from keyring")
-        except keyring.backend.errors.KeyringError as e:
-            logger.warning(f"Failed to delete api_token from keyring: {e}")
-
-        try:
-            keyring.delete_password(SERVICE_NAME, "refresh_token")
-            logger.debug("Refresh token deleted from keyring")
-        except keyring.backend.errors.KeyringError as e:
-            logger.warning(f"Failed to delete refresh_token from keyring: {e}")
-
+        self._api_token = None
+        self._refresh_token = None
         self.token_timestamp = 0
         logger.info("Token cleanup completed")

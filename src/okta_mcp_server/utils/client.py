@@ -5,26 +5,25 @@
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and limitations under the License.
 
-import keyring
 from loguru import logger
 from okta.client import Client as OktaClient
 
-from okta_mcp_server.utils.auth.auth_manager import SERVICE_NAME, OktaAuthManager
+from okta_mcp_server.utils.auth.auth_manager import OktaAuthManager
+from okta_mcp_server.utils.dpop_executor import make_dpop_executor
 
 
 async def get_okta_client(manager: OktaAuthManager) -> OktaClient:
-    """Initialize and return an Okta client"""
+    """Initialize and return an Okta client with DPoP-aware request execution."""
     logger.debug("Initializing Okta client")
-    api_token = keyring.get_password(SERVICE_NAME, "api_token")
     if not await manager.is_valid_token():
         logger.warning("Token is invalid or expired, re-authenticating")
         await manager.authenticate()
-        api_token = keyring.get_password(SERVICE_NAME, "api_token")
     config = {
         "orgUrl": manager.org_url,
-        "token": api_token,
+        "token": manager._api_token,
         "authorizationMode": "Bearer",
         "userAgent": "okta-mcp-server/0.0.1",
+        "requestExecutor": make_dpop_executor(manager),
     }
     logger.debug(f"Okta client configured for org: {manager.org_url}")
     return OktaClient(config)
