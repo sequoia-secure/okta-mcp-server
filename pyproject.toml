@@ -8,7 +8,7 @@ dependencies = [
     "loguru>=0.7.3",
     "mcp[cli]>=1.26.0,<2.0.0",
     "okta==3.4.1",
-    "requests>=2.32.4",
+    "requests>=2.33.0",
     "ruff>=0.11.13",
     "flatdict>=4.1.0",
     "cryptography>=46.0.7",
