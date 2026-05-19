@@ -85,6 +85,12 @@ TOOL_SCOPE_REGISTRY: dict[str, str] = {
     "replace_device_assurance_policy":      "okta.deviceAssurance.manage",
     "delete_device_assurance_policy":       "okta.deviceAssurance.manage",
     # ------------------------------------------------------------------
+    # Devices  (src/okta_mcp_server/tools/devices/devices.py)
+    # ------------------------------------------------------------------
+    "list_devices":                         "okta.devices.read",
+    "get_device":                           "okta.devices.read",
+    "list_device_users":                    "okta.devices.read",
+    # ------------------------------------------------------------------
     # System Logs  (src/okta_mcp_server/tools/system_logs/system_logs.py)
     #              (src/okta_mcp_server/tools/system_logs/login_failures.py)
     # ------------------------------------------------------------------
