@@ -24,6 +24,9 @@ from typing import Any, Dict, Optional
 
 from loguru import logger
 from okta.models.knowledge_constraint import KnowledgeConstraint
+from okta.models.platform_condition_evaluator_platform_operating_system import (
+    PlatformConditionEvaluatorPlatformOperatingSystem,
+)
 from okta.models.policy import Policy
 
 
@@ -100,6 +103,45 @@ def _drop_knowledge_constraint_validators() -> None:
     return removed
 
 
+# ---------------------------------------------------------------------------
+# PlatformConditionEvaluatorPlatformOperatingSystem.type — open the OS enum
+#
+# Symptom (observed 2026-05-27):
+#   Input should be 'ANDROID', 'ANY', 'IOS', 'OSX', 'OTHER' or 'WINDOWS'
+#     [type=enum, input_value='MACOS',    input_type=str]
+#     [type=enum, input_value='CHROMEOS', input_type=str]
+#
+# Root cause:
+#   The ``type`` field is annotated with the closed enum
+#   ``PolicyPlatformOperatingSystemType``, which only declares the six legacy
+#   values. The live API now returns ``MACOS`` (Okta's renaming of OSX) and
+#   ``CHROMEOS``, with ``LINUX`` likely on the horizon. Each new value breaks
+#   list_policy_rules for any rule whose conditions reference that platform.
+#
+# Fix:
+#   Loosen the field annotation to ``Optional[str]``. We never branch on the
+#   value inside this server (it's serialized through to the MCP client), so
+#   accepting any string is future-proof against further Okta expansions
+#   without paying the maintenance cost of mirroring every new enum addition.
+# ---------------------------------------------------------------------------
+
+
+def _relax_os_type() -> bool:
+    """Open the platform OS ``type`` field's enum to plain ``Optional[str]``.
+
+    Returns True if a patch was applied, False if already loose.
+    """
+    cls = PlatformConditionEvaluatorPlatformOperatingSystem
+    field = cls.model_fields.get("type")
+    if field is None:
+        return False
+    if field.annotation == Optional[str]:
+        return False
+    field.annotation = Optional[str]
+    cls.model_rebuild(force=True)
+    return True
+
+
 def apply_patches() -> None:
     """Apply all SDK patches. Called at server startup."""
     # Patch 1: Policy._embedded loosening (base + subclasses)
@@ -120,6 +162,13 @@ def apply_patches() -> None:
         logger.info(
             "[sdk-patches] Removed strict enum validators from KnowledgeConstraint: {}",
             removed,
+        )
+
+    # Patch 3: PlatformConditionEvaluatorPlatformOperatingSystem.type enum
+    if _relax_os_type():
+        logger.info(
+            "[sdk-patches] Loosened PlatformConditionEvaluatorPlatformOperatingSystem.type"
+            " from PolicyPlatformOperatingSystemType to Optional[str]"
         )
 
 
