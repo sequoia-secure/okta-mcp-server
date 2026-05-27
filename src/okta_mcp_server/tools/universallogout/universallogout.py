@@ -38,9 +38,22 @@ async def global_logout_user(login: str, ctx: Context = None) -> list:
     manager = ctx.request_context.lifespan_context.okta_auth_manager
 
     # Resolve login to Okta user ID.
+    #
+    # Escape backslashes (first) and double-quotes before interpolating the
+    # caller-supplied login into the SCIM filter. Without this, a login like
+    # ``x" or true or "`` would inject filter clauses and resolve to a
+    # different (possibly admin) user — combined with the elicitation
+    # fallback below this would let a caller revoke the wrong user's tokens.
+    # SCIM string literals are double-quote delimited per RFC 7644 §3.4.2.2;
+    # escape order matters (backslash before quote, to avoid re-escaping the
+    # backslashes we just inserted).
+    safe_login = login.replace("\\", "\\\\").replace('"', '\\"')
+
     try:
         client = await get_okta_client(manager)
-        users, _, err = await client.list_users({"search": f'profile.login eq "{login}"', "limit": 1})
+        users, _, err = await client.list_users(
+            {"search": f'profile.login eq "{safe_login}"', "limit": 1}
+        )
 
         if err:
             logger.error(f"Okta API error resolving login {login}: {err}")
