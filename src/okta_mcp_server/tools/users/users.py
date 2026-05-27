@@ -21,7 +21,7 @@ from okta_mcp_server.utils.elicitation import DeactivateConfirmation, DeleteConf
 from okta_mcp_server.utils.messages import DEACTIVATE_USER, DELETE_USER
 from okta_mcp_server.utils.pagination import build_query_params, create_paginated_response, extract_after_cursor, paginate_all_results
 from okta_mcp_server.utils.scope_guard import require_scopes
-from okta_mcp_server.utils.validation import validate_ids
+from okta_mcp_server.utils.validation import InvalidFilePathError, validate_file_path, validate_ids
 
 
 @mcp.tool()
@@ -478,20 +478,35 @@ async def export_users_csv(
 
     Parameters:
         output_path (str): Absolute path where the CSV file will be written.
-            Defaults to /tmp/okta_users_export.csv.
+            Defaults to /tmp/okta_users_export.csv. Must resolve inside one of
+            the directories listed in OKTA_MCP_ALLOWED_KEY_DIRS (default: /tmp,
+            /var/tmp). Symlink escapes are rejected. Paths outside the allow-
+            list return an error before any filesystem operation occurs.
         search (str, optional): Search expression for filtering users.
         filter (str, optional): Filter string for users.
         q (str, optional): Query string for users.
 
     Returns:
         Dict containing:
-        - output_path: Path to the written CSV file
+        - output_path: Symlink-resolved absolute path of the written CSV
         - total_users: Total number of users written
         - pages_fetched: Number of pages fetched
         - stopped_early: Whether pagination hit the page cap
         - stop_reason: Reason pagination stopped (if stopped_early)
     """
     logger.info(f"export_users_csv: starting export to {output_path}")
+
+    # Validate output_path BEFORE any filesystem access — this CSV is written
+    # with mode="w" (truncating), so an unvalidated caller-controlled path is
+    # an arbitrary-file-write primitive. validate_file_path enforces the
+    # OKTA_MCP_ALLOWED_KEY_DIRS allow-list (default: /tmp, /var/tmp) and
+    # returns the symlink-resolved real path; use that for makedirs/open so
+    # the path we open is identical to the one we security-checked (no TOCTOU).
+    try:
+        safe_output_path = validate_file_path(output_path, "output_path")
+    except InvalidFilePathError as e:
+        logger.warning(f"Rejected export_users_csv output_path: {e}")
+        return {"error": str(e)}
 
     CSV_FIELDS = [
         "id", "status", "login", "email", "firstName", "lastName",
@@ -536,7 +551,7 @@ async def export_users_csv(
 
         if not users:
             logger.info("No users found")
-            return {"output_path": output_path, "total_users": 0, "pages_fetched": 1}
+            return {"output_path": safe_output_path, "total_users": 0, "pages_fetched": 1}
 
         _has_more = (hasattr(response, "has_next") and response.has_next()) or bool(extract_after_cursor(response))
 
@@ -558,9 +573,14 @@ async def export_users_csv(
                 response, users, next_page_fn=_next_page, on_page=_on_page
             )
 
-        # Write CSV
-        os.makedirs(os.path.dirname(output_path) if os.path.dirname(output_path) else ".", exist_ok=True)
-        with open(output_path, "w", newline="", encoding="utf-8") as f:
+        # Write CSV. Use the security-checked safe_output_path (not the
+        # original output_path) so the file we open is identical to the
+        # one validate_file_path approved.
+        os.makedirs(
+            os.path.dirname(safe_output_path) if os.path.dirname(safe_output_path) else ".",
+            exist_ok=True,
+        )
+        with open(safe_output_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=CSV_FIELDS, extrasaction="ignore")
             writer.writeheader()
             for user in all_users:
@@ -624,8 +644,8 @@ async def export_users_csv(
                 })
 
         total = len(all_users)
-        logger.info(f"export_users_csv: wrote {total} users to {output_path}")
-        await ctx.info(f"Export complete! {total} users written to {output_path}")
+        logger.info(f"export_users_csv: wrote {total} users to {safe_output_path}")
+        await ctx.info(f"Export complete! {total} users written to {safe_output_path}")
 
         # Count users with missing firstName/lastName so the LLM can surface a note.
         missing_names = sum(
@@ -635,7 +655,7 @@ async def export_users_csv(
         )
 
         result = {
-            "output_path": output_path,
+            "output_path": safe_output_path,
             "total_users": total,
             "pages_fetched": pagination_info["pages_fetched"],
             "stopped_early": pagination_info["stopped_early"],
