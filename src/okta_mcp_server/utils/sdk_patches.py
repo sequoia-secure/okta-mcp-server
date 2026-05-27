@@ -23,6 +23,7 @@ any ``tools/*`` module so all subsequent SDK calls see the loosened models.
 from typing import Any, Dict, Optional
 
 from loguru import logger
+from okta.models.knowledge_constraint import KnowledgeConstraint
 from okta.models.policy import Policy
 
 
@@ -66,19 +67,60 @@ def _relax_embedded(cls: type) -> None:
     cls.model_rebuild(force=True)
 
 
+# ---------------------------------------------------------------------------
+# KnowledgeConstraint.{methods,types} — drop case-sensitive enum validators
+#
+# Symptom (observed 2026-05-27):
+#   1 validation error for KnowledgeConstraint
+#   types
+#     Value error, each list item must be one of
+#     ('SECURITY_KEY', 'PHONE', 'EMAIL', 'PASSWORD', 'SECURITY_QUESTION',
+#      'APP', 'FEDERATED')
+#     [type=value_error, input_value=['password'], input_type=list]
+#
+# Root cause:
+#   The auto-generated KnowledgeConstraint declares two strict, UPPERCASE-only
+#   field_validators (`methods_validate_enum`, `types_validate_enum`). The
+#   live API returns lowercase strings (e.g. ``['password']``), so the entire
+#   list_policy_rules response is rejected.
+#
+# Fix:
+#   Drop both validators. We accept whatever string Okta returns; consumers
+#   that care about canonical casing can normalize themselves.
+# ---------------------------------------------------------------------------
+
+_DROPPED_VALIDATORS = ("methods_validate_enum", "types_validate_enum")
+
+
+def _drop_knowledge_constraint_validators() -> None:
+    validators = KnowledgeConstraint.__pydantic_decorators__.field_validators
+    removed = [n for n in _DROPPED_VALIDATORS if validators.pop(n, None) is not None]
+    if removed:
+        KnowledgeConstraint.model_rebuild(force=True)
+    return removed
+
+
 def apply_patches() -> None:
     """Apply all SDK patches. Called at server startup."""
-    # Patch the base class and every subclass currently loaded.
+    # Patch 1: Policy._embedded loosening (base + subclasses)
     _relax_embedded(Policy)
-    patched = [Policy.__name__]
+    relaxed = [Policy.__name__]
     for sub in Policy.__subclasses__():
         _relax_embedded(sub)
-        patched.append(sub.__name__)
+        relaxed.append(sub.__name__)
     logger.info(
         "[sdk-patches] Loosened Policy._embedded on {} class(es): {}",
-        len(patched),
-        patched,
+        len(relaxed),
+        relaxed,
     )
+
+    # Patch 2: KnowledgeConstraint case-sensitive enum validators
+    removed = _drop_knowledge_constraint_validators()
+    if removed:
+        logger.info(
+            "[sdk-patches] Removed strict enum validators from KnowledgeConstraint: {}",
+            removed,
+        )
 
 
 apply_patches()
