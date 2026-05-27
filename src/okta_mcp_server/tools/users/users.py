@@ -464,6 +464,7 @@ async def delete_deactivated_user(user_id: str, ctx: Context = None) -> list:
 
 
 @mcp.tool()
+@require_scopes("okta.users.read")
 async def export_users_csv(
     ctx: Context,
     output_path: str = "/tmp/okta_users_export.csv",

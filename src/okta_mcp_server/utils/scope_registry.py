@@ -31,10 +31,15 @@ TOOL_SCOPE_REGISTRY: dict[str, str] = {
     "list_users":                           "okta.users.read",
     "get_user":                             "okta.users.read",
     "get_user_profile_attributes":          "okta.users.read",
+    "export_users_csv":                     "okta.users.read",
     "create_user":                          "okta.users.manage",
     "update_user":                          "okta.users.manage",
     "deactivate_user":                      "okta.users.manage",
     "delete_deactivated_user":              "okta.users.manage",
+    # ------------------------------------------------------------------
+    # Universal Logout  (src/okta_mcp_server/tools/universallogout/universallogout.py)
+    # ------------------------------------------------------------------
+    "global_logout_user":                   "okta.users.manage",
     # ------------------------------------------------------------------
     # Groups  (src/okta_mcp_server/tools/groups/groups.py)
     # ------------------------------------------------------------------

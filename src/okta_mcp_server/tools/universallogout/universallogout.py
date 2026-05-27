@@ -12,9 +12,11 @@ from okta_mcp_server.server import mcp
 from okta_mcp_server.utils.client import get_okta_client
 from okta_mcp_server.utils.elicitation import GlobalLogoutConfirmation, elicit_or_fallback
 from okta_mcp_server.utils.messages import GLOBAL_LOGOUT_USER
+from okta_mcp_server.utils.scope_guard import require_scopes
 
 
 @mcp.tool()
+@require_scopes("okta.users.manage", error_return_type="list")
 async def global_logout_user(login: str, ctx: Context = None) -> list:
     """Revoke all active tokens for an Okta user via the Global Token Revocation endpoint.
 
