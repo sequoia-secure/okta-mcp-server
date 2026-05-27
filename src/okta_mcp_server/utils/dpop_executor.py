@@ -12,6 +12,55 @@ from loguru import logger
 from okta.request_executor import RequestExecutor
 
 
+# Headers whose values are credential-equivalent and must NEVER appear in
+# logs. Matched case-insensitively. Anything with one of these names is
+# replaced by "<redacted>" before logging.
+_SENSITIVE_RESPONSE_HEADERS = frozenset({
+    "set-cookie",
+    "cookie",
+    "authorization",
+    "proxy-authorization",
+    "x-okta-request-id",  # operational, but contains tenant-internal request UUID
+    "x-okta-identifier",
+    "x-okta-session-id",
+})
+
+# Max length of response body to emit in error logs. Real Okta error
+# payloads are well under this; user-data leak surface is bounded.
+_MAX_BODY_LOG_BYTES = 1024
+
+
+def _sanitize_headers(headers) -> dict:
+    """Return a copy of ``headers`` with credential-bearing fields masked.
+
+    Header keys are normalised to lowercase for comparison; the original
+    case of non-sensitive keys is preserved in the output.
+    """
+    safe: dict = {}
+    try:
+        items = headers.items() if hasattr(headers, "items") else dict(headers).items()
+    except Exception:
+        return {"<unloggable-headers>": "<error>"}
+    for k, v in items:
+        if str(k).lower() in _SENSITIVE_RESPONSE_HEADERS:
+            safe[k] = "<redacted>"
+        else:
+            safe[k] = v
+    return safe
+
+
+def _truncate_body(body) -> str:
+    """Return a bounded repr of ``body`` for safe logging.
+
+    Limits output to ``_MAX_BODY_LOG_BYTES`` characters and notes truncation
+    explicitly so an analyst reading the log knows the content was clipped.
+    """
+    s = repr(body) if body is not None else "<no body>"
+    if len(s) <= _MAX_BODY_LOG_BYTES:
+        return s
+    return f"{s[:_MAX_BODY_LOG_BYTES]}... (truncated, original {len(s)} chars)"
+
+
 def make_dpop_executor(auth_manager):
     """Return a RequestExecutor subclass that attaches DPoP proofs to every API request.
 
@@ -74,10 +123,13 @@ def make_dpop_executor(auth_manager):
 
             status = res_details.status
             if status not in range(200, 300):
-                # Log full response so we can diagnose Okta error codes
+                # Log enough to diagnose Okta error codes WITHOUT leaking
+                # credentials or bulk PII. Strip credential-bearing headers
+                # (Set-Cookie etc.) and bound the body length.
                 logger.error(
                     f"DPoP executor: Okta API returned {status} — "
-                    f"body={resp_body!r} headers={dict(res_details.headers)}"
+                    f"body={_truncate_body(resp_body)} "
+                    f"headers={_sanitize_headers(res_details.headers)}"
                 )
 
                 # Handle server-supplied DPoP nonce (token endpoint uses 400;
@@ -97,7 +149,8 @@ def make_dpop_executor(auth_manager):
                     _, res_details, resp_body, error = await self._http_client.send_request(request)
                     if res_details and res_details.status not in range(200, 300):
                         logger.error(
-                            f"DPoP executor: retry also failed: {res_details.status} body={resp_body!r}"
+                            f"DPoP executor: retry also failed: {res_details.status} "
+                            f"body={_truncate_body(resp_body)}"
                         )
                     return (request, res_details, resp_body, error)
 
