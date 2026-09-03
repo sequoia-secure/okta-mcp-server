@@ -37,6 +37,10 @@ TOOL_SCOPE_REGISTRY: dict[str, str] = {
     "deactivate_user":                      "okta.users.manage",
     "delete_deactivated_user":              "okta.users.manage",
     # ------------------------------------------------------------------
+    # Universal Logout  (src/okta_mcp_server/tools/universallogout/universallogout.py)
+    # ------------------------------------------------------------------
+    "global_logout_user":                   "okta.users.manage",
+    # ------------------------------------------------------------------
     # User Resources  (src/okta_mcp_server/tools/user_resources/user_resources.py)
     # ------------------------------------------------------------------
     "list_user_groups":                     "okta.users.read",
@@ -92,6 +96,12 @@ TOOL_SCOPE_REGISTRY: dict[str, str] = {
     "create_device_assurance_policy":       "okta.deviceAssurance.manage",
     "replace_device_assurance_policy":      "okta.deviceAssurance.manage",
     "delete_device_assurance_policy":       "okta.deviceAssurance.manage",
+    # ------------------------------------------------------------------
+    # Devices  (src/okta_mcp_server/tools/devices/devices.py)
+    # ------------------------------------------------------------------
+    "list_devices":                         "okta.devices.read",
+    "get_device":                           "okta.devices.read",
+    "list_device_users":                    "okta.devices.read",
     # ------------------------------------------------------------------
     # System Logs  (src/okta_mcp_server/tools/system_logs/system_logs.py)
     #              (src/okta_mcp_server/tools/system_logs/login_failures.py)

@@ -47,6 +47,15 @@ class DeactivateConfirmation(BaseModel):
     )
 
 
+class GlobalLogoutConfirmation(BaseModel):
+    """Schema presented to the user when a global logout is requested."""
+
+    confirm: bool = Field(
+        ...,
+        description="Set to true to revoke all tokens for this user. The user will be immediately signed out everywhere.",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Elicitation result wrapper
 # ---------------------------------------------------------------------------
