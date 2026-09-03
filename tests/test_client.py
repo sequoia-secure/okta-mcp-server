@@ -27,13 +27,13 @@ def _build_manager_mock() -> MagicMock:
 class TestGetOktaClient:
     @pytest.mark.asyncio
     async def test_uses_freshly_refreshed_token_not_stale_pre_refresh_value(self):
-        keyring_state = {"api_token": "stale-pre-refresh-token"}
+        manager = _build_manager_mock()
+        manager._api_token = "stale-pre-refresh-token"
 
         def refresh_then_return_true():
-            keyring_state["api_token"] = "fresh-post-refresh-token"
+            manager._api_token = "fresh-post-refresh-token"
             return True
 
-        manager = _build_manager_mock()
         manager.is_valid_token = AsyncMock(side_effect=refresh_then_return_true)
 
         captured_config: dict = {}
@@ -42,20 +42,15 @@ class TestGetOktaClient:
             captured_config.update(config)
             return MagicMock()
 
-        with (
-            patch("okta_mcp_server.utils.client.keyring") as mock_kr,
-            patch("okta_mcp_server.utils.client.OktaClient", side_effect=fake_okta_client),
-        ):
-            mock_kr.get_password.side_effect = lambda _s, k: keyring_state.get(k)
+        with patch("okta_mcp_server.utils.client.OktaClient", side_effect=fake_okta_client):
             await get_okta_client(manager)
 
         assert captured_config["token"] == "fresh-post-refresh-token"
 
     @pytest.mark.asyncio
     async def test_uses_cached_token_when_already_valid(self):
-        keyring_state = {"api_token": "valid-cached-token"}
-
         manager = _build_manager_mock()
+        manager._api_token = "valid-cached-token"
         manager.is_valid_token = AsyncMock(return_value=True)
 
         captured_config: dict = {}
@@ -64,11 +59,7 @@ class TestGetOktaClient:
             captured_config.update(config)
             return MagicMock()
 
-        with (
-            patch("okta_mcp_server.utils.client.keyring") as mock_kr,
-            patch("okta_mcp_server.utils.client.OktaClient", side_effect=fake_okta_client),
-        ):
-            mock_kr.get_password.side_effect = lambda _s, k: keyring_state.get(k)
+        with patch("okta_mcp_server.utils.client.OktaClient", side_effect=fake_okta_client):
             await get_okta_client(manager)
 
         assert captured_config["token"] == "valid-cached-token"
