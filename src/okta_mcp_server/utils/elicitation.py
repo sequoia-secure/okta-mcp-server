@@ -56,6 +56,24 @@ class GlobalLogoutConfirmation(BaseModel):
     )
 
 
+class GroupLogoutConfirmation(BaseModel):
+    """Schema presented to the user when a whole group is about to be signed out.
+
+    Separate from :class:`GlobalLogoutConfirmation` so the form text names the
+    blast radius: the operator is approving a logout for every member of a
+    group, not for one named user.
+    """
+
+    confirm: bool = Field(
+        ...,
+        description=(
+            "Set to true to sign out EVERY member of this group. All of them "
+            "will be signed out of all sessions immediately and must "
+            "re-authenticate. This cannot be undone."
+        ),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Elicitation result wrapper
 # ---------------------------------------------------------------------------

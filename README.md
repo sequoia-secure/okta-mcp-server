@@ -570,6 +570,48 @@ The Okta Open Source MCP Server provides the following tools for LLMs to interac
 | `get_user_profile_attributes`   | Retrieve all supported user profile attributes          | - `What user profile fields are available?` <br> - `Show me all the custom attributes we can set` <br> - `List the standard Okta user attributes`             |
 | `list_user_groups`              | List all groups that a specific user is a member of     | - `What groups is john.doe@company.com in?` <br> - `Show me all group memberships for user ID 00u1234567890` <br> - `Which teams does Jane Smith belong to?` |
 
+### Session Revocation (Sign-out)
+
+> **Required scope:** `okta.users.manage` (sessions, tokens, grants) · `okta.groups.read` (group fan-out)
+
+Two Okta operations are involved in signing someone out, and **neither subsumes the other**:
+
+| Operation | What it revokes | What it misses |
+| --------- | --------------- | -------------- |
+| `revoke_user_sessions` | Okta IdP sessions + issued OIDC/OAuth access and refresh tokens | Sessions created for web or native apps; consent grants |
+| `revoke_user_grants` | OAuth consent grants (apps must be re-consented) | Sessions and tokens |
+
+`logout_user` runs both, which is why it is the tool to reach for when the intent is "sign this person out of Okta".
+
+| Tool                            | Description                                              | Usage Examples                                                                                                                                                |
+| ------------------------------- | -------------------------------------------------------- |---------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `logout_user`                   | Sign one user out of Okta: sessions, issued tokens, and consent grants (prompts for confirmation) | - `Sign john.doe@company.com out of Okta` <br> - `Revoke all of Jane Smith's sessions and app consents` <br> - `Log this user out and make them re-enroll MFA` |
+| `logout_group`                  | Sign out **every member** of an Okta group (prompts for confirmation, with the member count) | - `Sign out everyone in group 00g1234567890` <br> - `Revoke sessions for all members of the Contractors group` <br> - `Kill every session for the compromised-users group` |
+| `confirm_logout_group`          | Deprecated fallback that executes a group logout for clients without elicitation support; requires `confirmation='LOGOUT'` | - (not called directly; the LLM relays the confirmation prompt from `logout_group`) |
+| `global_logout_user`            | Universal Logout — a single [Global Token Revocation](https://developer.okta.com/docs/api/openapi/okta-oauth/oauth/globaltokenrevocation) call. **Requires Identity Threat Protection; see below.** | - `Run a universal logout for john.doe@company.com` |
+
+#### Universal Logout is deliberately not wired in
+
+`revoke_user_sessions` explicitly does not clear sessions created for web or native apps. Closing that gap — propagating sign-out to third-party OIN/SAML/OIDC apps — needs Okta's Global Token Revocation endpoint, gated on `okta.universalLogout.manage`.
+
+That scope ships with **Okta Identity Threat Protection**. An org without ITP does not advertise it, so `logout_user` and `logout_group` do not call the endpoint at all rather than carrying a step that can never run. `global_logout_user` remains as the standalone tool for orgs that do have it; it is scope-gated, so elsewhere it is simply pruned at startup.
+
+Check whether your org can issue the scope before assuming it is a configuration oversight:
+
+```
+curl -s https://YOUR_ORG.okta.com/.well-known/oauth-authorization-server | jq '.scopes_supported | map(select(test("universalLogout")))'
+```
+
+An empty result means the org authorization server will reject a client-credentials token request for that scope with `invalid_scope`. Enabling it is a licensing action, not a config change.
+
+**Notes on `logout_group`:**
+
+- It is an incident-response tool. Put the affected population in an Okta group, then point it at the group ID.
+- Group members are enumerated and **counted before the confirmation prompt**, so the operator approves a specific blast radius rather than a group ID.
+- Groups larger than **500 members** are refused outright.
+- Members are signed out a few at a time to stay inside Okta's per-org API rate limits, so a large group takes a while.
+- One member failing does not stop the rest. Failures are reported per member, and every revocation is idempotent, so re-running for the failures is safe.
+
 ### Groups
 
 > **Required scope:** `okta.groups.read` (read) · `okta.groups.manage` (write)
@@ -752,7 +794,12 @@ The Okta Open Source MCP Server provides the following tools for LLMs to interac
 All destructive operations (deleting groups, applications, policies, policy rules, device assurance policies, and deactivating/deleting users) use the **[MCP Elicitation API](https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation)** to prompt the user for explicit confirmation before proceeding.
 
 - **Clients that support elicitation** (e.g., Claude Desktop with MCP SDK ≥ 1.26): The user sees a confirmation dialog directly in the chat UI. They can accept, decline, or cancel.
-- **Clients that do not yet support elicitation**: The tool returns a JSON payload describing the pending action so the LLM can relay the confirmation request to the user. The deprecated `confirm_delete_group` / `confirm_delete_application` tools remain available as a fallback for these clients.
+- **Clients that do not yet support elicitation**: The tool returns a JSON payload describing the pending action so the LLM can relay the confirmation request to the user. The deprecated `confirm_delete_group` / `confirm_delete_application` / `confirm_logout_group` tools remain available as a fallback for these clients.
+
+The sign-out tools deliberately differ in how they treat a client that cannot elicit:
+
+- `logout_user` and `global_logout_user` **auto-confirm** in that case, matching their pre-elicitation behaviour. The blast radius is one named user the caller already identified.
+- `logout_group` **never** auto-confirms. Extending that default to a group would mean a client that merely fails to advertise the elicitation capability silently signs out everyone in it, so it always returns the `confirm_logout_group` prompt instead.
 
 ## � Scope-Based Tool Loading
 
@@ -770,7 +817,8 @@ The Okta Open Source MCP Server uses a **scope-based tool loading** mechanism to
 | Scope | Tools Unlocked |
 | ----- | -------------- |
 | `okta.users.read` | `list_users`, `get_user`, `get_user_profile_attributes`, `list_user_groups` |
-| `okta.users.manage` | `create_user`, `update_user`, `deactivate_user`, `delete_deactivated_user` |
+| `okta.users.manage` | `create_user`, `update_user`, `deactivate_user`, `delete_deactivated_user`, `logout_user`, `logout_group`, `confirm_logout_group` |
+| `okta.universalLogout.manage` | `global_logout_user` — **requires Identity Threat Protection**, see above |
 | `okta.groups.read` | `list_groups`, `get_group`, `list_group_users`, `list_group_apps` |
 | `okta.groups.manage` | `create_group`, `update_group`, `delete_group`, `add_user_to_group`, `remove_user_from_group` |
 | `okta.apps.read` | `list_applications`, `get_application`, `list_catalog_apps`, `get_catalog_app` |
@@ -788,6 +836,10 @@ The Okta Open Source MCP Server uses a **scope-based tool loading** mechanism to
 | `okta.domains.manage` | `create_custom_domain`, `replace_custom_domain`, `delete_custom_domain`, `upsert_custom_domain_certificate`, `verify_custom_domain` |
 | `okta.emailDomains.read` | `list_email_domains`, `get_email_domain` |
 | `okta.emailDomains.manage` | `create_email_domain`, `replace_email_domain`, `delete_email_domain`, `verify_email_domain` |
+
+> **Two-scope tools.** `scope_registry.py` maps each tool to a single scope, because that mapping drives startup pruning. `logout_group` and `confirm_logout_group` also need `okta.groups.read` to enumerate members; their `@require_scopes` decorators enforce that at call time, so without it they appear in `tools/list` but return a scope error rather than acting.
+>
+> **`okta.universalLogout.manage` requires Identity Threat Protection.** Unlike the other scopes in this table it is not simply a matter of granting it in the Admin Console — see [Universal Logout is deliberately not wired in](#universal-logout-is-deliberately-not-wired-in) above.
 
 ### What you need to do
 

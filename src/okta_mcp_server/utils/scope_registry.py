@@ -38,8 +38,20 @@ TOOL_SCOPE_REGISTRY: dict[str, str] = {
     "delete_deactivated_user":              "okta.users.manage",
     # ------------------------------------------------------------------
     # Universal Logout  (src/okta_mcp_server/tools/universallogout/universallogout.py)
+    #
+    # global_logout_user calls POST /oauth2/v1/global-token-revocation, which is
+    # gated on okta.universalLogout.manage — NOT okta.users.manage. See
+    # https://developer.okta.com/docs/api/oauth2.
+    #
+    # logout_group and confirm_logout_group need okta.groups.read as well, which
+    # their @require_scopes decorators enforce at call time. This registry holds
+    # one scope per tool (it drives startup pruning), so they are listed under
+    # the more privileged of the two.
     # ------------------------------------------------------------------
-    "global_logout_user":                   "okta.users.manage",
+    "global_logout_user":                   "okta.universalLogout.manage",
+    "logout_user":                          "okta.users.manage",
+    "logout_group":                         "okta.users.manage",
+    "confirm_logout_group":                 "okta.users.manage",
     # ------------------------------------------------------------------
     # User Resources  (src/okta_mcp_server/tools/user_resources/user_resources.py)
     # ------------------------------------------------------------------
