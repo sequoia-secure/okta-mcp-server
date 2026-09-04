@@ -22,6 +22,7 @@ All notable changes to this project will be documented in this file.
 - The SCIM filter escaping already applied to `global_logout_user`'s `login` is now factored into a shared `_escape_scim` helper used by every login resolution in the module, so the new tools cannot regress it.
 
 ### Bug Fixes
+- **`logout_user` could never resolve a login, so no revocation ever ran.** `_resolve_login` passed the query as a positional dict — `list_users({"search": ..., "limit": 1})` — but the SDK's first positional parameter after `self` is `content_type`, a strict `str`. Every call failed pydantic validation with `Input should be a valid string` before a request was issued, and the tool returned an exception instead of signing anyone out. Now spreads keywords, matching every other call site (`users.py`). Inherited from `global_logout_user`, which is always pruned on orgs without `okta.universalLogout.manage` and therefore never exercised the bug; it only became reachable once `logout_user` shipped.
 - Revocation calls now read the SDK error via `result[-1]` rather than unpacking three names. The generated Okta SDK returns a 3-tuple `(None, resp, None)` on 204 but 2-tuples `(None, error)` / `(response, error)` on its two failure paths, so a three-name unpack raises `ValueError` on exactly the paths the caller wrote it to handle. This matches the idiom already used in `groups.py`.
 
 ### Documentation

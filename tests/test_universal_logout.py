@@ -420,3 +420,64 @@ class TestConfirmLogoutGroup:
 
         assert result["succeeded"] == 1
         client.revoke_user_sessions.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# SDK call-shape contract
+# ---------------------------------------------------------------------------
+
+class TestListUsersCallShape:
+    """The mocks above accept any arguments, so a call the real Okta SDK would
+    reject looks correct in every other test here. This replays the call our
+    code actually makes against the SDK's own pydantic validation layer.
+
+    The bug this exists for: ``list_users({"search": ..., "limit": 1})`` passes
+    a dict positionally, and the SDK's first positional parameter after
+    ``self`` is ``content_type`` (a strict str). Validation fails with "Input
+    should be a valid string" before any request is issued, so login resolution
+    raised and no revocation ever ran. It reached production because it was
+    inherited from ``global_logout_user``, which is always scope-pruned and so
+    never exercised it.
+
+    Validation fires when the coroutine is awaited, not when it is created,
+    which is why these await rather than inspecting the signature.
+    """
+
+    @staticmethod
+    async def _validation_error_for(*args, **kwargs):
+        """Await the real SDK method against a dummy self; return the
+        ValidationError if its argument validation rejects the call, else None.
+        Any other exception means validation passed and the body failed on the
+        dummy, which is not what we are testing."""
+        from okta.client import Client
+        from pydantic import ValidationError
+
+        try:
+            await Client.list_users(MagicMock(), *args, **kwargs)
+        except ValidationError as exc:
+            return exc
+        except Exception:
+            return None
+        return None
+
+    @pytest.mark.asyncio
+    @patch(f"{MODULE}.get_okta_client")
+    async def test_resolve_login_call_survives_real_sdk_validation(self, mock_get_client):
+        client = _make_client()
+        mock_get_client.return_value = client
+
+        await logout_user(login=LOGIN, ctx=_make_ctx())
+
+        # Replay exactly what the tool called, rather than asserting a literal,
+        # so this keeps checking whatever the call becomes.
+        args, kwargs = client.list_users.await_args
+        assert kwargs, "list_users must be called with keyword arguments, not a positional query dict"
+
+        exc = await self._validation_error_for(*args, **kwargs)
+        assert exc is None, f"the real Okta SDK rejects this call: {exc}"
+
+    @pytest.mark.asyncio
+    async def test_the_old_positional_dict_form_would_be_caught(self):
+        """Guards the guard: proves the check above is not vacuous."""
+        exc = await self._validation_error_for({"search": 'profile.login eq "x"', "limit": 1})
+        assert exc is not None, "a positional query dict should fail SDK validation"
