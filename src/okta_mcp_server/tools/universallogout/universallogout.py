@@ -123,8 +123,13 @@ async def _resolve_login(client, login: str) -> tuple[Optional[str], Optional[st
     """
     safe_login = _escape_scim(login)
 
+    # Keyword arguments, not a query dict. The SDK's first positional parameter
+    # after `self` is ``content_type``, a strict str — so passing a dict
+    # positionally binds it there and fails pydantic validation with
+    # "Input should be a valid string" before any request is made. Every other
+    # call site in this codebase spreads keywords (see users.py's list_users).
     users, _, err = await client.list_users(
-        {"search": f'profile.login eq "{safe_login}"', "limit": 1}
+        search=f'profile.login eq "{safe_login}"', limit=1
     )
 
     if err:
