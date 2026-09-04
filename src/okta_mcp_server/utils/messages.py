@@ -60,6 +60,19 @@ GLOBAL_LOGOUT_USER = (
     "This will immediately sign them out of all active sessions."
 )
 
+LOGOUT_USER = (
+    "Are you sure you want to sign out user {login_or_id}? "
+    "Their Okta sessions, issued OAuth/OIDC tokens, and consent grants will be "
+    "revoked immediately, and they will have to re-authenticate."
+)
+
+LOGOUT_GROUP = (
+    "Are you sure you want to sign out ALL {member_count} members of group "
+    "{group_id}? Every one of them will have their Okta sessions, tokens, and "
+    "consent grants revoked immediately and will have to re-authenticate. "
+    "This cannot be undone."
+)
+
 # ---------------------------------------------------------------------------
 # Policies
 # ---------------------------------------------------------------------------

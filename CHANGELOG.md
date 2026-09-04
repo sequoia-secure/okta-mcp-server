@@ -1,6 +1,32 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+### Features
+- Added session-revocation tooling in `tools/universallogout/`, so "sign this person out of Okta" is one tool call rather than two the caller has to know to combine:
+  - `logout_user` — runs both Okta revocations for one user: `revoke_user_sessions` (Okta IdP sessions + issued OIDC/OAuth tokens, with optional `forget_devices`) and `revoke_user_grants` (OAuth consent grants). Neither subsumes the other: `revoke_user_sessions` does not touch consent grants, and revoking grants does not end sessions. Both steps run even if the first fails, and each step's outcome is reported separately, so a partial logout is never reported as a clean one.
+  - `logout_group` — fans `logout_user` out across the members of an Okta group, for incident response against a defined population. Members are enumerated and counted **before** the confirmation prompt so the operator approves a blast radius rather than a group ID; groups above 500 members are refused; members are processed `LOGOUT_CONCURRENCY`-at-a-time to stay inside Okta's per-org rate limits; and one member failing neither stops the others nor is lost from the report. All revocations are idempotent, so re-running for the failures is safe.
+  - `confirm_logout_group` — deprecated two-tool fallback for clients without elicitation support, matching the existing `confirm_delete_group` pattern.
+
+  Universal Logout is deliberately **not** wired into these tools — see below.
+
+### Security
+- **Fixed the required scope on `global_logout_user`.** It was gated on `okta.users.manage`, but `POST /oauth2/v1/global-token-revocation` is gated on `okta.universalLogout.manage` (see [OAuth 2.0 Scopes](https://developer.okta.com/docs/api/oauth2)). The tool was therefore advertised to — and prunable only by — the wrong scope: a token with `okta.users.manage` but not `okta.universalLogout.manage` saw the tool in `tools/list` and got a 403 from Okta on call, while a token holding exactly the right scope had the tool pruned away at startup. Both the `@require_scopes` decorator and `TOOL_SCOPE_REGISTRY` now name `okta.universalLogout.manage`.
+- `logout_group` deliberately does **not** auto-confirm when the client lacks elicitation support, unlike `logout_user` / `global_logout_user`. Auto-confirming is a defensible default for one named user; extending it to a group would mean a client that merely fails to advertise the elicitation capability silently signs out everyone in it. It returns the `confirm_logout_group` prompt instead.
+- The SCIM filter escaping already applied to `global_logout_user`'s `login` is now a shared `_escape_scim` helper used by every login resolution in the module, so the new tools cannot regress it.
+
+### Known limitations
+- **Universal Logout is not part of `logout_user` / `logout_group`.** `revoke_user_sessions` explicitly does not clear sessions created for web or native apps; closing that gap requires the Global Token Revocation endpoint, whose `okta.universalLogout.manage` scope ships with Okta Identity Threat Protection. An org without ITP does not advertise that scope in `/.well-known/oauth-authorization-server`, so its org authorization server rejects a client-credentials token request for it with `invalid_scope` — it cannot be enabled by editing `OKTA_SCOPES` and granting it in the Admin Console. Rather than carry a step that can never run on such an org, the group and per-user tools omit it entirely; `global_logout_user` remains as the standalone tool for orgs that do license ITP, and is pruned at startup elsewhere.
+- `logout_group` deliberately does **not** auto-confirm when the client lacks elicitation support, unlike `logout_user` / `global_logout_user`. Auto-confirming is a defensible default for one named user; extending it to a group would mean a client that merely fails to advertise the elicitation capability silently signs out everyone in it. It returns the `confirm_logout_group` prompt instead.
+- The SCIM filter escaping already applied to `global_logout_user`'s `login` is now factored into a shared `_escape_scim` helper used by every login resolution in the module, so the new tools cannot regress it.
+
+### Bug Fixes
+- Revocation calls now read the SDK error via `result[-1]` rather than unpacking three names. The generated Okta SDK returns a 3-tuple `(None, resp, None)` on 204 but 2-tuples `(None, error)` / `(response, error)` on its two failure paths, so a three-name unpack raises `ValueError` on exactly the paths the caller wrote it to handle. This matches the idiom already used in `groups.py`.
+
+### Documentation
+- Documented the sign-out tools, the three-operation distinction, and the `okta.universalLogout.manage` scope in the README — `global_logout_user` had never been documented there.
+
 ## v1.1.5
 
 ### Security
