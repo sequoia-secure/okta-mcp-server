@@ -78,16 +78,27 @@ def make_dpop_executor(auth_manager):
             self._default_headers["Authorization"] = f"DPoP {auth_manager._api_token}"
             self._dpop_api_nonce = None
 
+        @staticmethod
+        def _htu(url: str) -> str:
+            """The htu claim for ``url``: scheme + authority + path only.
+
+            RFC 9449 §4.2 requires the query and fragment to be stripped, and
+            Okta enforces it — a proof whose htu carries ``?search=...`` is
+            rejected with 400 ``invalid_dpop_proof`` / "'htu' claim in the DPoP
+            proof JWT is invalid". See okta/okta-sdk-golang#468 for the same
+            bug in another SDK's pagination path.
+            """
+            parsed = urlsplit(url)
+            return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+
         def _make_dpop_proof(self, method: str, url: str, nonce: str | None = None) -> str:
             """Generate a DPoP proof with htu stripped of query/fragment (RFC 9449 §4.2).
 
             Includes ath (access token hash) as required by RFC 9449 §4.2 when
             presenting a DPoP-bound token to a resource server.
             """
-            parsed = urlsplit(url)
-            htu = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
             return auth_manager._generate_dpop_proof(
-                method.upper(), htu, nonce=nonce, access_token=auth_manager._api_token
+                method.upper(), self._htu(url), nonce=nonce, access_token=auth_manager._api_token
             )
 
         async def create_request(
@@ -126,8 +137,17 @@ def make_dpop_executor(auth_manager):
                 # Log enough to diagnose Okta error codes WITHOUT leaking
                 # credentials or bulk PII. Strip credential-bearing headers
                 # (Set-Cookie etc.) and bound the body length.
+                # Emit the proof's own binding claims alongside the failure.
+                # Okta rejects a mismatched proof with a generic
+                # "'htu' claim ... is invalid" and never echoes what it
+                # expected, so without these a diagnosis needs a code read and
+                # a guess at which call site produced the request.
                 logger.error(
                     f"DPoP executor: Okta API returned {status} — "
+                    f"htm={request.get('method')!r} "
+                    f"htu={self._htu(request.get('url', ''))!r} "
+                    f"request_url={request.get('url')!r} "
+                    f"nonce_in_use={self._dpop_api_nonce is not None} "
                     f"body={_truncate_body(resp_body)} "
                     f"headers={_sanitize_headers(res_details.headers)}"
                 )
@@ -145,7 +165,15 @@ def make_dpop_executor(auth_manager):
                     url = request["url"]
                     new_proof = self._make_dpop_proof(method, url, nonce=dpop_nonce)
                     request["headers"]["DPoP"] = new_proof
-                    self._default_headers.update(request["headers"])
+                    # Only the nonce is persisted (self._dpop_api_nonce above).
+                    # This used to be `self._default_headers.update(
+                    # request["headers"])`, which copied THIS request's DPoP
+                    # proof into the executor's defaults. A proof is single-use
+                    # and bound to one htm/htu pair, so every later request
+                    # built from those defaults inherited a proof for the wrong
+                    # URL — which Okta rejects with exactly the
+                    # "'htu' claim in the DPoP proof JWT is invalid" error this
+                    # retry path exists to recover from.
                     _, res_details, resp_body, error = await self._http_client.send_request(request)
                     if res_details and res_details.status not in range(200, 300):
                         logger.error(
