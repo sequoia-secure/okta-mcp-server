@@ -219,6 +219,66 @@ def _sweep_strict_enums() -> tuple[int, int, int]:
 
 
 # ---------------------------------------------------------------------------
+# Patch 3 — Required bool fields the live API sometimes omits.
+#
+# Symptom (first observed 2026-09-15, application.get for a legacy SAML app):
+#   4 validation errors for SamlApplication
+#   settings.signOn.allowMultipleAcsEndpoints
+#     Field required [type=missing, ...]
+#   settings.signOn.assertionSigned / requestCompressed / responseSigned
+#     Field required [type=missing, ...]
+#
+# ``SamlApplicationSettingsSignOn`` declares five boolean flags
+# (``allowMultipleAcsEndpoints``, ``assertionSigned``, ``honorForceAuthn``,
+# ``requestCompressed``, ``responseSigned``) as required ``bool`` fields
+# with no default. Okta's real API omits these on some app configs
+# (observed on an app old enough to predate one or more of the settings)
+# rather than always sending an explicit ``true``/``false``. Any model
+# with a required, non-Optional ``bool`` field is equally exposed —
+# this isn't specific to SAML sign-on settings — so, like Patch 2, this
+# sweeps every loaded Okta model rather than patching one class at a time.
+# We never branch on these flags inside this server — they're only
+# serialized through to the MCP client — so treating "omitted" as
+# "unknown" (``None``) is strictly safer than rejecting the whole object.
+# ---------------------------------------------------------------------------
+
+
+def _loosen_required_bools(cls: type) -> int:
+    """Make every required, bare-``bool`` field on ``cls`` optional.
+
+    Returns the number of fields loosened.
+    """
+    fields_loosened = 0
+    for finfo in cls.model_fields.values():
+        if not finfo.is_required():
+            continue
+        if finfo.annotation is not bool:
+            continue
+        finfo.annotation = Optional[bool]
+        finfo.default = None
+        fields_loosened += 1
+
+    if fields_loosened:
+        cls.model_rebuild(force=True)
+    return fields_loosened
+
+
+def _sweep_required_bools() -> tuple[int, int]:
+    """Run the generic required-bool loosening across every Okta model.
+
+    Returns ``(classes_touched, fields_loosened)``.
+    """
+    classes_touched = 0
+    fields_loosened = 0
+    for cls in _iter_okta_model_classes():
+        f = _loosen_required_bools(cls)
+        if f:
+            classes_touched += 1
+            fields_loosened += f
+    return classes_touched, fields_loosened
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -249,6 +309,15 @@ def apply_patches() -> None:
         classes,
         validators,
         fields,
+    )
+
+    # Patch 3: generic required-bool sweep across all loaded Okta models.
+    bool_classes, bool_fields = _sweep_required_bools()
+    logger.info(
+        "[sdk-patches] Required-bool sweep: touched {} class(es); "
+        "loosened {} required bool field(s).",
+        bool_classes,
+        bool_fields,
     )
 
 
