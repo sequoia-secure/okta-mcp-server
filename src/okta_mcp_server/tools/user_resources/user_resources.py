@@ -10,6 +10,7 @@ from mcp.server.fastmcp import Context
 
 from okta_mcp_server.server import mcp
 from okta_mcp_server.utils.client import get_okta_client
+from okta_mcp_server.utils.raw_api import okta_get
 from okta_mcp_server.utils.scope_guard import require_scopes
 from okta_mcp_server.utils.serialization import json_response
 from okta_mcp_server.utils.validation import validate_ids
@@ -57,4 +58,53 @@ async def list_user_groups(user_id: str, ctx: Context = None) -> list:
 
     except Exception as e:
         logger.error(f"Exception while listing groups for user {user_id}: {type(e).__name__}: {e}")
+        return [{"exception": str(e)}]
+
+
+#: Factor fields surfaced to the caller. ``_embedded`` is deliberately left
+#: out: for a factor still in enrollment it can carry activation material
+#: (TOTP shared secret, QR code link), which has no place in an investigation
+#: transcript.
+_FACTOR_FIELDS = ("id", "factorType", "provider", "vendorName", "status", "created", "lastUpdated", "profile")
+
+
+@mcp.tool()
+@require_scopes("okta.users.read", error_return_type="list")
+@validate_ids("user_id")
+@json_response
+async def list_user_factors(user_id: str, ctx: Context = None) -> list:
+    """List the MFA factors a user has enrolled (Okta Verify, Duo, SMS, WebAuthn, ...).
+
+    Use this to check whether an account has any second factor enrolled, which
+    factor types and providers, and their status (``ACTIVE``,
+    ``PENDING_ACTIVATION``, ...). An empty list means no factor is enrolled.
+    The password is not a factor and never appears here.
+
+    Parameters:
+        user_id (str, required): The ID, login, or login shortname of the user.
+
+    Returns:
+        List of factors, each with ``id``, ``factorType``, ``provider``,
+        ``vendorName``, ``status``, ``created``, ``lastUpdated`` and
+        ``profile`` (device name, phone number, credential id, depending on
+        type). Enrollment activation material is never returned.
+    """
+    logger.info(f"Listing factors for user: {user_id}")
+
+    manager = ctx.request_context.lifespan_context.okta_auth_manager
+
+    try:
+        client = await get_okta_client(manager)
+        _, factors, err = await okta_get(client, f"/api/v1/users/{user_id}/factors")
+
+        if err:
+            logger.error(f"Okta API error while listing factors for user {user_id}: {err}")
+            return [{"error": str(err)}]
+
+        factors = [{k: f[k] for k in _FACTOR_FIELDS if k in f} for f in (factors or [])]
+        logger.info(f"Retrieved {len(factors)} factors for user {user_id}")
+        return factors
+
+    except Exception as e:
+        logger.error(f"Exception while listing factors for user {user_id}: {type(e).__name__}: {e}")
         return [{"exception": str(e)}]
