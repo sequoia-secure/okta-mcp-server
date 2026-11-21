@@ -569,6 +569,7 @@ The Okta Open Source MCP Server provides the following tools for LLMs to interac
 | `delete_deactivated_user`       | Permanently delete a deactivated user (prompts for confirmation) | - `Delete the deactivated user john.doe@company.com` <br> - `Remove former employee Jane Smith permanently` <br> - `Clean up old contractor accounts`         |
 | `get_user_profile_attributes`   | Retrieve all supported user profile attributes          | - `What user profile fields are available?` <br> - `Show me all the custom attributes we can set` <br> - `List the standard Okta user attributes`             |
 | `list_user_groups`              | List all groups that a specific user is a member of     | - `What groups is john.doe@company.com in?` <br> - `Show me all group memberships for user ID 00u1234567890` <br> - `Which teams does Jane Smith belong to?` |
+| `list_user_factors`             | List a user's enrolled MFA factors (type, provider, status). Enrollment activation material is never returned. | - `Does john.doe@company.com have MFA enrolled?` <br> - `Which factors does user 00u1234567890 have?` |
 
 ### Session Revocation (Sign-out)
 
@@ -677,6 +678,18 @@ An empty result means the org authorization server will reject a client-credenti
 | `create_device_assurance_policy`      | Create a new Device Assurance Policy                          | - `Create a MacOS policy requiring OS 14.2 and disk encryption` <br> - `Set up an iOS policy that blocks jailbroken devices` <br> - `Add a Windows compliance policy requiring BitLocker`        |
 | `replace_device_assurance_policy`     | Fully replace an existing Device Assurance Policy             | - `Update the MacOS policy to require OS 14.5` <br> - `Enable secure hardware requirement for our Windows policy` <br> - `Change the minimum OS version for our iOS policy`                      |
 | `delete_device_assurance_policy`      | Delete a Device Assurance Policy (prompts for confirmation)   | - `Delete the old Windows compliance policy` <br> - `Remove the deprecated Android policy` <br> - `Clean up unused device assurance policies`                                                    |
+
+### Admin Roles, Network Zones and Authenticators (read-only)
+
+> **Required scope:** `okta.roles.read` · `okta.networkZones.read` · `okta.authenticators.read`. There are no write tools for these resources; changes stay in the Admin Console.
+
+| Tool                          | Description                                                                 | Usage Examples |
+| ----------------------------- | --------------------------------------------------------------------------- | -------------- |
+| `list_admin_role_assignments` | Users holding admin roles (role type, direct or via group, custom role and resource set), optional `role_type` filter, and the roles of named `group_ids`. Okta has no endpoint that enumerates groups with roles. | - `Who are our super admins?` <br> - `Does this group hold any admin role?` |
+| `list_network_zones`          | All network zones with gateways, proxies, ASNs, locations and usage         | - `Which IP ranges are in our trusted zones?` <br> - `List our block-list zones` |
+| `get_network_zone`            | One network zone by id                                                      | - `What does zone nzo1abc cover?` |
+| `list_authenticators`         | All authenticators and their settings                                       | - `Which authenticators are active?` |
+| `get_authenticator`           | One authenticator with its settings and per-method settings                 | - `How is Okta Verify configured? Is number challenge on?` |
 
 ### Logs
 
@@ -816,7 +829,7 @@ The Okta Open Source MCP Server uses a **scope-based tool loading** mechanism to
 
 | Scope | Tools Unlocked |
 | ----- | -------------- |
-| `okta.users.read` | `list_users`, `get_user`, `get_user_profile_attributes`, `list_user_groups` |
+| `okta.users.read` | `list_users`, `get_user`, `get_user_profile_attributes`, `list_user_groups`, `list_user_factors` |
 | `okta.users.manage` | `create_user`, `update_user`, `deactivate_user`, `delete_deactivated_user`, `logout_user`, `logout_group`, `confirm_logout_group` |
 | `okta.universalLogout.manage` | `global_logout_user` — **requires Identity Threat Protection**, see above |
 | `okta.groups.read` | `list_groups`, `get_group`, `list_group_users`, `list_group_apps` |
@@ -827,6 +840,9 @@ The Okta Open Source MCP Server uses a **scope-based tool loading** mechanism to
 | `okta.policies.manage` | `create_policy`, `update_policy`, `delete_policy`, `activate_policy`, `deactivate_policy`, `create_policy_rule`, `update_policy_rule`, `delete_policy_rule`, `activate_policy_rule`, `deactivate_policy_rule` |
 | `okta.deviceAssurance.read` | `list_device_assurance_policies`, `get_device_assurance_policy` |
 | `okta.deviceAssurance.manage` | `create_device_assurance_policy`, `replace_device_assurance_policy`, `delete_device_assurance_policy` |
+| `okta.roles.read` | `list_admin_role_assignments` |
+| `okta.networkZones.read` | `list_network_zones`, `get_network_zone` |
+| `okta.authenticators.read` | `list_authenticators`, `get_authenticator` |
 | `okta.logs.read` | `get_logs` |
 | `okta.brands.read` | `list_brands`, `get_brand`, `list_brand_domains`, `list_brand_themes`, `get_brand_theme`, `get_sign_in_page_resources`, `get_customized_sign_in_page`, `get_default_sign_in_page`, `get_preview_sign_in_page`, `list_sign_in_widget_versions`, `get_error_page_resources`, `get_customized_error_page`, `get_default_error_page`, `get_preview_error_page`, `get_sign_out_page_settings` |
 | `okta.brands.manage` | `create_brand`, `replace_brand`, `delete_brand`, `replace_brand_theme`, `upload_brand_theme_logo`, `delete_brand_theme_logo`, `upload_brand_theme_favicon`, `delete_brand_theme_favicon`, `upload_brand_theme_background_image`, `delete_brand_theme_background_image`, `replace_customized_sign_in_page`, `delete_customized_sign_in_page`, `replace_preview_sign_in_page`, `delete_preview_sign_in_page`, `replace_customized_error_page`, `delete_customized_error_page`, `replace_preview_error_page`, `delete_preview_error_page`, `replace_sign_out_page_settings` |

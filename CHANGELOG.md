@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 ## Unreleased
 
 ### Features
+- Added read-only security-posture tools for investigations. None of them write; changes to roles, zones and authenticators stay in the Admin Console.
+  - `list_admin_role_assignments` (`okta.roles.read`) — every user holding an admin role, with role `type`, `assignmentType` (direct or via group), and custom role / resource-set ids; optional `role_type` filter; roles of caller-named `group_ids` (Okta has no endpoint that enumerates groups with roles). Per-principal lookups that fail are listed in `errors` rather than dropped.
+  - `list_user_factors` (`okta.users.read`) — a user's enrolled factors. `_embedded` is never returned, because for a factor in enrollment it can hold activation material such as a TOTP shared secret.
+  - `list_network_zones`, `get_network_zone` (`okta.networkZones.read`) — zone gateways, proxies, ASNs, locations and usage.
+  - `list_authenticators`, `get_authenticator` (`okta.authenticators.read`) — authenticator settings and, for `get_authenticator`, per-method settings (Okta Verify push / number challenge, phone SMS / voice).
+
+  These go through the request executor (`utils/raw_api.py`, GET only) instead of the typed SDK, whose polymorphic models for zones, authenticators, factors and roles drop fields they do not know. Pagination takes only the `after` cursor from a `Link` header or `_links.next`, never the URL, so a response cannot point the next request at another host.
 - Added session-revocation tooling in `tools/universallogout/`, so "sign this person out of Okta" is one tool call rather than two the caller has to know to combine:
   - `logout_user` — runs both Okta revocations for one user: `revoke_user_sessions` (Okta IdP sessions + issued OIDC/OAuth tokens, with optional `forget_devices`) and `revoke_user_grants` (OAuth consent grants). Neither subsumes the other: `revoke_user_sessions` does not touch consent grants, and revoking grants does not end sessions. Both steps run even if the first fails, and each step's outcome is reported separately, so a partial logout is never reported as a clean one.
   - `logout_group` — fans `logout_user` out across the members of an Okta group, for incident response against a defined population. Members are enumerated and counted **before** the confirmation prompt so the operator approves a blast radius rather than a group ID; groups above 500 members are refused; members are processed `LOGOUT_CONCURRENCY`-at-a-time to stay inside Okta's per-org rate limits; and one member failing neither stops the others nor is lost from the report. All revocations are idempotent, so re-running for the failures is safe.

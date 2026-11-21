@@ -141,6 +141,7 @@ def main():
     # subsequent SDK model_validate() calls see the loosened types.
     from okta_mcp_server.utils import sdk_patches  # noqa: F401
     from okta_mcp_server.tools.applications import applications  # noqa: F401
+    from okta_mcp_server.tools.authenticators import authenticators  # noqa: F401
     from okta_mcp_server.tools.customization.brands import brands  # noqa: F401
     from okta_mcp_server.tools.customization.custom_domains import custom_domains  # noqa: F401
     from okta_mcp_server.tools.customization.themes import themes  # noqa: F401
@@ -150,7 +151,9 @@ def main():
     from okta_mcp_server.tools.device_assurance import device_assurance  # noqa: F401
     from okta_mcp_server.tools.devices import devices  # noqa: F401
     from okta_mcp_server.tools.groups import groups  # noqa: F401
+    from okta_mcp_server.tools.network_zones import network_zones  # noqa: F401
     from okta_mcp_server.tools.policies import policies  # noqa: F401
+    from okta_mcp_server.tools.roles import roles  # noqa: F401
     from okta_mcp_server.tools.system_logs import system_logs  # noqa: F401
     from okta_mcp_server.tools.system_logs import login_failures  # noqa: F401
     from okta_mcp_server.tools.user_resources import user_resources  # noqa: F401

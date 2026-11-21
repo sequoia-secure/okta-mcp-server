@@ -56,6 +56,7 @@ TOOL_SCOPE_REGISTRY: dict[str, str] = {
     # User Resources  (src/okta_mcp_server/tools/user_resources/user_resources.py)
     # ------------------------------------------------------------------
     "list_user_groups":                     "okta.users.read",
+    "list_user_factors":                    "okta.users.read",
     # ------------------------------------------------------------------
     # Groups  (src/okta_mcp_server/tools/groups/groups.py)
     # ------------------------------------------------------------------
@@ -114,6 +115,23 @@ TOOL_SCOPE_REGISTRY: dict[str, str] = {
     "list_devices":                         "okta.devices.read",
     "get_device":                           "okta.devices.read",
     "list_device_users":                    "okta.devices.read",
+    # ------------------------------------------------------------------
+    # Admin Roles  (src/okta_mcp_server/tools/roles/roles.py)
+    #
+    # Read-only. The optional per-admin profile lookup also uses
+    # okta.users.read, best-effort; without it the tool still lists roles.
+    # ------------------------------------------------------------------
+    "list_admin_role_assignments":          "okta.roles.read",
+    # ------------------------------------------------------------------
+    # Network Zones  (src/okta_mcp_server/tools/network_zones/network_zones.py)
+    # ------------------------------------------------------------------
+    "list_network_zones":                   "okta.networkZones.read",
+    "get_network_zone":                     "okta.networkZones.read",
+    # ------------------------------------------------------------------
+    # Authenticators  (src/okta_mcp_server/tools/authenticators/authenticators.py)
+    # ------------------------------------------------------------------
+    "list_authenticators":                  "okta.authenticators.read",
+    "get_authenticator":                    "okta.authenticators.read",
     # ------------------------------------------------------------------
     # System Logs  (src/okta_mcp_server/tools/system_logs/system_logs.py)
     #              (src/okta_mcp_server/tools/system_logs/login_failures.py)
