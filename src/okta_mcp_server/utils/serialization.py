@@ -214,7 +214,9 @@ def _to_jsonable(obj: Any, depth: int, seen: set) -> Any:
             return None
         seen.add(obj_id)
         try:
-            return {str(k): _to_jsonable(v, depth + 1, seen) for k, v in obj.items()}
+            return _redact_dict(
+                {str(k): _to_jsonable(v, depth + 1, seen) for k, v in obj.items()}
+            )
         finally:
             seen.discard(obj_id)
 
@@ -240,6 +242,82 @@ def _to_jsonable(obj: Any, depth: int, seen: set) -> Any:
     # 9. Last resort
     logger.debug(f"to_jsonable: falling back to str() for {type(obj).__name__}")
     return str(obj)
+
+
+# ---------------------------------------------------------------------------
+# Credential redaction
+# ---------------------------------------------------------------------------
+
+#: Placeholder that replaces a credential value in tool output.
+REDACTED = "[REDACTED]"
+
+#: Normalized key suffixes (lowercase, ``_``/``-`` stripped) that mark a
+#: credential.  Suffix rather than substring, so ``passwordChanged`` and
+#: ``secretHash`` stay visible while ``client_secret`` and ``sharedSecret`` do
+#: not.  Every SDK model and raw dict a tool returns passes through the
+#: dict branch of :func:`_to_jsonable`, so redacting there covers every tool
+#: without per-tool filtering.  The service token can hold permissions (for
+#: example ``okta.apps.clientCredentials.read``) under which Okta returns
+#: ``credentials.oauthClient.client_secret`` on app objects, and read tools are
+#: reachable by callers far less privileged than that token.
+_SECRET_KEY_SUFFIXES = ("secret", "password", "privatekey")
+
+#: Normalized keys that are credentials outright, matched exactly so fields
+#: such as ``token_endpoint_auth_method`` survive.
+_SECRET_KEYS = frozenset(
+    {"apikey", "apitoken", "accesstoken", "refreshtoken", "idtoken", "sessiontoken", "token"}
+)
+
+#: Private and symmetric members of a JWK (RFC 7518 §6.2.2, §6.3.2, §6.4).
+#: Only redacted inside a dict that carries ``kty``, since ``d``/``p``/``q``
+#: are too short to treat as credentials anywhere else.
+_JWK_PRIVATE_MEMBERS = frozenset({"d", "p", "q", "dp", "dq", "qi", "k", "oth"})
+
+
+def _normalize_key(key: str) -> str:
+    return key.lower().replace("_", "").replace("-", "")
+
+
+def _is_secret_key(key: str) -> bool:
+    norm = _normalize_key(key)
+    return norm in _SECRET_KEYS or norm.endswith(_SECRET_KEY_SUFFIXES)
+
+
+def _redact_value(value: Any) -> Any:
+    """Redact the value held under a credential-named key.
+
+    Scalars are replaced outright.  A dict keeps its shape and has its
+    ``value`` member replaced, which covers Okta's ``{"value": "..."}`` form
+    for scheme-app and user passwords while leaving configuration objects such
+    as a password policy's ``settings.password.complexity`` readable.
+    """
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, (str, int, float)):
+        return REDACTED
+    if isinstance(value, dict):
+        return {k: (REDACTED if k == "value" and v is not None else v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_redact_value(v) for v in value]
+    return value
+
+
+def _redact_dict(d: dict) -> dict:
+    """Return ``d`` with credential values replaced by :data:`REDACTED`.
+
+    ``d`` is already JSON-native (its children were converted first), so this
+    runs once per dict, bottom-up, and is idempotent.
+    """
+    is_jwk = "kty" in d
+    out = {}
+    for k, v in d.items():
+        if is_jwk and k in _JWK_PRIVATE_MEMBERS and v is not None:
+            out[k] = REDACTED
+        elif _is_secret_key(k):
+            out[k] = _redact_value(v)
+        else:
+            out[k] = v
+    return out
 
 
 def _is_transport_response(obj: Any) -> bool:

@@ -11,6 +11,7 @@ from loguru import logger
 from mcp.server.fastmcp import Context
 
 from okta_mcp_server.server import mcp
+from okta_mcp_server.utils.app_projection import application_summaries
 from okta_mcp_server.utils.client import get_okta_client
 from okta_mcp_server.utils.elicitation import DeleteConfirmation, elicit_or_fallback
 from okta_mcp_server.utils.messages import DELETE_GROUP
@@ -496,7 +497,8 @@ async def list_group_apps(
 
     Returns:
         Dict containing:
-            - items (List): List of application objects
+            - items (List): Application summaries (id, name, label, status, signOnMode,
+              created, lastUpdated, features, visibility); see get_application for detail.
             - total_fetched (int): Number of apps returned
             - has_more (bool): Whether more results are available
             - next_cursor (str | None): Cursor for the next page
@@ -546,10 +548,10 @@ async def list_group_apps(
                 response, apps, next_page_fn=_next_page, on_page=_on_page
             )
             logger.info(f"Successfully retrieved {len(all_apps)} apps for group {group_id} across {pagination_info['pages_fetched']} pages")
-            return create_paginated_response(all_apps, response, fetch_all_used=True, pagination_info=pagination_info)
+            return create_paginated_response(application_summaries(all_apps), response, fetch_all_used=True, pagination_info=pagination_info)
 
         logger.info(f"Successfully retrieved {len(apps)} applications for group {group_id}")
-        return create_paginated_response(apps, response, fetch_all_used=fetch_all)
+        return create_paginated_response(application_summaries(apps), response, fetch_all_used=fetch_all)
     except Exception as e:
         logger.error(f"Exception while listing applications for group {group_id}: {type(e).__name__}: {e}")
         return {"error": str(e)}

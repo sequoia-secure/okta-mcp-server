@@ -43,6 +43,7 @@ def _build_application_model(app_config: Dict[str, Any]) -> Any:
     return model_cls(**app_config)
 
 
+from okta_mcp_server.utils.app_projection import application_summaries
 from okta_mcp_server.utils.client import get_okta_client
 from okta_mcp_server.utils.elicitation import DeactivateConfirmation, DeleteConfirmation, elicit_or_fallback
 from okta_mcp_server.utils.messages import DEACTIVATE_APPLICATION, DELETE_APPLICATION
@@ -85,7 +86,8 @@ async def list_applications(
 
     Returns:
         Dict containing:
-        - items: List of application objects
+        - items: Application summaries (id, name, label, status, signOnMode, created,
+          lastUpdated, features, visibility). Use get_application for one app's full detail.
         - total_fetched: Number of applications returned
         - has_more: Boolean indicating if more results are available
         - next_cursor: Cursor for the next page (if has_more is True)
@@ -145,10 +147,10 @@ async def list_applications(
             logger.info(
                 f"Successfully retrieved {len(all_apps)} applications across {pagination_info['pages_fetched']} pages"
             )
-            return create_paginated_response(all_apps, response, fetch_all_used=True, pagination_info=pagination_info)
+            return create_paginated_response(application_summaries(all_apps), response, fetch_all_used=True, pagination_info=pagination_info)
         else:
             logger.info(f"Successfully retrieved {app_count} applications")
-            return create_paginated_response(apps, response, fetch_all_used=fetch_all)
+            return create_paginated_response(application_summaries(apps), response, fetch_all_used=fetch_all)
     except Exception as e:
         logger.error(f"Exception while listing applications: {type(e).__name__}: {e}")
         return {"error": str(e)}
